@@ -90,6 +90,9 @@ class VoiceAssistant:
         """运行语音助手"""
         logger.info("=== 语音助手已启动 ===")
         self.keyboard_manager.start_listening()
+        if self.keyboard_manager.exit_flag:
+            logger.info("=== 语音助手已关闭 ===")
+            self.reset_state()
 
 def main():
     # 判断是 Whisper 还是 SiliconFlow
@@ -103,6 +106,8 @@ def main():
     try:
         assistant = VoiceAssistant(audio_processor)
         assistant.run()
+    except KeyboardInterrupt:
+        logger.info("程序被用户中断")
     except Exception as e:
         error_msg = str(e)
         if "Input event monitoring will not be possible" in error_msg:
@@ -114,6 +119,8 @@ def main():
         else:
             logger.error(f"发生错误: {error_msg}", exc_info=True)
             sys.exit(1)
+    finally:
+        sys.exit(0)
 
 if __name__ == "__main__":
     main() 

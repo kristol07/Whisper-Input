@@ -46,29 +46,71 @@ class KeyboardManager:
         sysetem_platform = os.getenv("SYSTEM_PLATFORM")
         if sysetem_platform == "win" :
             self.sysetem_platform = Key.ctrl
-            logger.info("配置到Windows平台")
+            logger.info("System platform: Windows")
         else:
             self.sysetem_platform = Key.cmd
-            logger.info("配置到Mac平台")
+            logger.info("System platform: Mac")
         
 
         # 获取转录和翻译按钮
         transcriptions_button = os.getenv("TRANSCRIPTIONS_BUTTON")
         try:
-            self.transcriptions_button = Key[transcriptions_button]
-            logger.info(f"配置到转录按钮：{transcriptions_button}")
-        except KeyError:
-            logger.error(f"无效的转录按钮配置：{transcriptions_button}")
+            # Handle special key mappings
+            if transcriptions_button.lower() == 'alt':
+                self.transcriptions_button = Key.alt
+            elif transcriptions_button.lower() == 'shift':
+                self.transcriptions_button = Key.shift
+            elif transcriptions_button.lower() == 'ctrl':
+                self.transcriptions_button = Key.ctrl
+            else:
+                self.transcriptions_button = Key[transcriptions_button]
+            logger.info(f"Transcription button configured: {transcriptions_button}")
+            logger.debug(f"Transcription button Key object: {self.transcriptions_button}")
+        except (KeyError, AttributeError):
+            logger.error(f"Invalid transcription button configuration: {transcriptions_button}")
 
         translations_button = os.getenv("TRANSLATIONS_BUTTON")
         try:
-            self.translations_button = Key[translations_button]
-            logger.info(f"配置到翻译按钮(与转录按钮组合)：{translations_button}")
-        except KeyError:
-            logger.error(f"无效的翻译按钮配置：{translations_button}")
+            # Handle special key mappings
+            if translations_button.lower() == 'alt':
+                self.translations_button = Key.alt
+            elif translations_button.lower() == 'shift':
+                self.translations_button = Key.shift
+            elif translations_button.lower() == 'ctrl':
+                self.translations_button = Key.ctrl
+            else:
+                self.translations_button = Key[translations_button]
+            logger.info(f"Translation button configured: {translations_button}")
+            logger.debug(f"Translation button Key object: {self.translations_button}")
+        except (KeyError, AttributeError):
+            logger.error(f"Invalid translation button configuration: {translations_button}")
+            logger.info("Falling back to default translation button: shift")
+            self.translations_button = Key.shift  # 设置默认值
+            
+        # Add double click detection variables
+        self.last_press_time_trans = 0  # For transcription button
+        self.last_press_time_tran = 0   # For translation button
+        self.double_click_threshold = 0.3  # 300ms threshold for double click
+        self.exit_flag = False
+        self.listener = None
+        self.is_recording = False
+        self.is_translating = False
 
-        logger.info(f"按住 {transcriptions_button} 键：实时语音转录（保持原文）")
-        logger.info(f"按住 {translations_button} + {transcriptions_button} 键：实时语音翻译（翻译成英文）")
+        # Get exit key from env or use default
+        exit_button = os.getenv("EXIT_BUTTON", "f6")
+        try:
+            self.exit_button = Key[exit_button]
+            logger.info(f"Exit button configured: {exit_button}")
+        except KeyError:
+            logger.error(f"Invalid exit button configuration: {exit_button}")
+            self.exit_button = Key.f6
+
+        # Log the keyboard controls
+        logger.info("=== Keyboard Controls ===")
+        logger.info(f"Double click {transcriptions_button}: Start/Stop recording (Transcription mode)")
+        logger.info(f"Double click {translations_button}: Start/Stop recording (Translation mode)")
+        logger.info(f"Press {exit_button}: Exit program")
+        logger.info("=====================")
     
     @property
     def state(self):
@@ -184,11 +226,11 @@ class KeyboardManager:
         if not text:
             # 如果没有文本且不是错误，可能是录音时长不足
             if self.state in (InputState.PROCESSING, InputState.TRANSLATING):
-                self.show_warning("录音时长过短，请至少录制1秒")
+                self.show_warning("Recording too short, please record at least 1 second")
             return
             
         try:
-            logger.info("正在输入转录文本...")
+            logger.info("Inputting transcribed text...")
             self._delete_previous_text()
             
             # 先输入文本和完成标记
@@ -208,13 +250,13 @@ class KeyboardManager:
                 # 恢复原始剪贴板内容
                 self._restore_clipboard()
             
-            logger.info("文本输入完成")
+            logger.info("Text input completed")
             
             # 清理处理状态
             self.state = InputState.IDLE
         except Exception as e:
-            logger.error(f"文本输入失败: {e}")
-            self.show_error(f"❌ 文本输入失败: {e}")
+            logger.error(f"Text input failed: {e}")
+            self.show_error(f"❌ Text input failed: {e}")
     
     def _delete_previous_text(self):
         """删除之前输入的临时文本"""
@@ -272,48 +314,69 @@ class KeyboardManager:
     def on_press(self, key):
         """按键按下时的回调"""
         try:
-            if key == self.transcriptions_button: #Key.f8:  # Option 键按下
-                # 在开始任何操作前保存剪贴板内容
-                if self._original_clipboard is None:
-                    self._original_clipboard = pyperclip.paste()
-                    
-                self.option_pressed = True
-                self.option_press_time = time.time()
-                self.start_duration_check()
+            logger.info(f"Key pressed: {key}")
+            current_time = time.time()
+
+            if key == self.exit_button:
+                logger.info("Exit button triggered")
+                self.exit_flag = True
+                if self.listener:
+                    self.listener.stop()
+                return False
+
+            elif key == self.transcriptions_button:
+                if current_time - self.last_press_time_trans < self.double_click_threshold:
+                    # Double click detected
+                    if self.is_recording:
+                        # If already recording, stop it
+                        self.is_recording = False
+                        self.state = InputState.PROCESSING
+                        self.on_record_stop()
+                    else:
+                        # If not recording, start it
+                        if not self.is_translating:
+                            self.is_recording = True
+                            if self._original_clipboard is None:
+                                self._original_clipboard = pyperclip.paste()
+                            self.state = InputState.RECORDING
+                            self.on_record_start()
+                self.last_press_time_trans = current_time
+
             elif key == self.translations_button:
-                self.shift_pressed = True
+                if current_time - self.last_press_time_tran < self.double_click_threshold:
+                    # Double click detected
+                    if self.is_translating:
+                        # If already translating, stop it
+                        self.is_translating = False
+                        self.state = InputState.TRANSLATING
+                        self.on_translate_stop()
+                    else:
+                        # If not translating, start it
+                        if not self.is_recording:
+                            self.is_translating = True
+                            if self._original_clipboard is None:
+                                self._original_clipboard = pyperclip.paste()
+                            self.state = InputState.RECORDING_TRANSLATE
+                            self.on_translate_start()
+                self.last_press_time_tran = current_time
+
         except AttributeError:
             pass
 
     def on_release(self, key):
         """按键释放时的回调"""
         try:
-            if key == self.transcriptions_button:# Key.f8:  # Option 键释放
-                self.shift_pressed = False
-                self.option_pressed = False
-                self.option_press_time = None
-                self.is_checking_duration = False
-                
-                if self.has_triggered:
-                    if self.state == InputState.RECORDING_TRANSLATE:
-                        self.state = InputState.TRANSLATING
-                    elif self.state == InputState.RECORDING:
-                        self.state = InputState.PROCESSING
-                    self.has_triggered = False
-            elif key == self.translations_button:#Key.f7:
-                self.shift_pressed = False
-                if (self.state == InputState.RECORDING_TRANSLATE and 
-                    not self.option_pressed and 
-                    self.has_triggered):
-                    self.state = InputState.TRANSLATING
-                    self.has_triggered = False
+            # We don't need most of the old release logic since we're not using hold anymore
+            pass
         except AttributeError:
             pass
     
     def start_listening(self):
         """开始监听键盘事件"""
-        with Listener(on_press=self.on_press, on_release=self.on_release) as listener:
-            listener.join()
+        logger.info("Started listening for keyboard events")
+        self.listener = Listener(on_press=self.on_press, on_release=self.on_release)
+        self.listener.start()
+        self.listener.join()
 
     def reset_state(self):
         """重置所有状态和临时文本"""
@@ -324,6 +387,8 @@ class KeyboardManager:
         self._restore_clipboard()
         
         # 重置状态标志
+        self.is_recording = False
+        self.is_translating = False
         self.option_pressed = False
         self.shift_pressed = False
         self.option_press_time = None
@@ -338,13 +403,13 @@ class KeyboardManager:
 
 def check_accessibility_permissions():
     """检查是否有辅助功能权限并提供指导"""
-    logger.warning("\n=== macOS 辅助功能权限检查 ===")
-    logger.warning("此应用需要辅助功能权限才能监听键盘事件。")
-    logger.warning("\n请按照以下步骤授予权限：")
-    logger.warning("1. 打开 系统偏好设置")
-    logger.warning("2. 点击 隐私与安全性")
-    logger.warning("3. 点击左侧的 辅助功能")
-    logger.warning("4. 点击右下角的锁图标并输入密码")
-    logger.warning("5. 在右侧列表中找到 Terminal（或者您使用的终端应用）并勾选")
-    logger.warning("\n授权后，请重新运行此程序。")
+    logger.warning("\n=== macOS Accessibility Permissions Check ===")
+    logger.warning("This application requires accessibility permissions to listen for keyboard events.")
+    logger.warning("\nPlease follow these steps to grant permissions:")
+    logger.warning("1. Open System Preferences")
+    logger.warning("2. Click Privacy & Security")
+    logger.warning("3. Click Accessibility in the left sidebar")
+    logger.warning("4. Click the lock icon in the bottom right and enter your password")
+    logger.warning("5. Find Terminal (or your terminal app) in the right list and check it")
+    logger.warning("\nAfter granting permissions, please restart this program.")
     logger.warning("===============================\n") 
