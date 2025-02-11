@@ -1,123 +1,145 @@
 import os
 import sys
-
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from src.audio.recorder import AudioRecorder
 from src.keyboard.listener import KeyboardManager, check_accessibility_permissions
-from src.transcription.whisper import WhisperProcessor
+from src.llm.processors.audio.groq_audio_processor import GroqAudioProcessor
+from src.llm.processors.audio.siliconflow_audio_processor import SiliconFlowAudioProcessor
 from src.utils.logger import logger
-from src.transcription.senseVoiceSmall import SenseVoiceSmallProcessor
-
 
 def check_microphone_permissions():
-    """检查麦克风权限并提供指导"""
-    logger.warning("\n=== macOS 麦克风权限检查 ===")
-    logger.warning("此应用需要麦克风权限才能进行录音。")
-    logger.warning("\n请按照以下步骤授予权限：")
-    logger.warning("1. 打开 系统偏好设置")
-    logger.warning("2. 点击 隐私与安全性")
-    logger.warning("3. 点击左侧的 麦克风")
-    logger.warning("4. 点击右下角的锁图标并输入密码")
-    logger.warning("5. 在右侧列表中找到 Terminal（或者您使用的终端应用）并勾选")
-    logger.warning("\n授权后，请重新运行此程序。")
+    """Check microphone permissions and provide guidance"""
+    logger.warning("\n=== macOS Microphone Permission Check ===")
+    logger.warning("This application requires microphone permissions to record audio.")
+    logger.warning("\nPlease follow these steps to grant permission:")
+    logger.warning("1. Open System Preferences")
+    logger.warning("2. Click on Privacy & Security")
+    logger.warning("3. Click on Microphone in the left sidebar")
+    logger.warning("4. Click the lock icon in the bottom right and enter your password")
+    logger.warning("5. Find Terminal (or your terminal app) in the right list and check it")
+    logger.warning("\nAfter granting permission, please restart this program.")
     logger.warning("===============================\n")
 
+class AudioProcessorFactory:
+    """Factory for creating audio processors based on service platform"""
+    
+    @staticmethod
+    def create(platform: str = "siliconflow") -> Optional[GroqAudioProcessor | SiliconFlowAudioProcessor]:
+        """Create an audio processor instance based on platform
+        
+        Args:
+            platform: Service platform name ('groq' or 'siliconflow')
+            
+        Returns:
+            Audio processor instance
+            
+        Raises:
+            ValueError: If platform is invalid
+        """
+        platform = platform.lower()
+        if platform == "groq":
+            return GroqAudioProcessor()
+        elif platform == "siliconflow":
+            return SiliconFlowAudioProcessor()
+        else:
+            raise ValueError(f"Invalid service platform: {platform}")
+
 class VoiceAssistant:
+    """Voice assistant that handles audio recording and processing"""
+    
     def __init__(self, audio_processor):
         self.audio_recorder = AudioRecorder()
         self.audio_processor = audio_processor
         self.keyboard_manager = KeyboardManager(
-            on_record_start=self.start_transcription_recording,
-            on_record_stop=self.stop_transcription_recording,
-            on_translate_start=self.start_translation_recording,
-            on_translate_stop=self.stop_translation_recording,
+            on_record_start=self._start_recording,
+            on_record_stop=self._stop_recording,
+            on_translate_start=self._start_recording,
+            on_translate_stop=self._stop_translation_recording,
             on_reset_state=self.reset_state
         )
     
-    def start_transcription_recording(self):
-        """开始录音（转录模式）"""
+    def _start_recording(self):
+        """Start audio recording"""
         self.audio_recorder.start_recording()
     
-    def stop_transcription_recording(self):
-        """停止录音并处理（转录模式）"""
-        audio = self.audio_recorder.stop_recording()
+    def _process_audio(self, audio, mode: str = "transcriptions") -> None:
+        """Process recorded audio and handle the result
+        
+        Args:
+            audio: Audio data to process
+            mode: Processing mode ('transcriptions' or 'translations')
+        """
         if audio == "TOO_SHORT":
-            logger.warning("录音时长太短，状态将重置")
+            logger.warning("Recording too short, resetting state")
             self.keyboard_manager.reset_state()
-        elif audio:
-            result = self.audio_processor.process_audio(
-                audio,
-                mode="transcriptions",
-                prompt=""
-            )
-            # 解构返回值
-            text, error = result if isinstance(result, tuple) else (result, None)
-            self.keyboard_manager.type_text(text, error)
-        else:
-            logger.error("没有录音数据，状态将重置")
+            return
+            
+        if not audio:
+            logger.error("No audio data, resetting state")
             self.keyboard_manager.reset_state()
+            return
+            
+        result = self.audio_processor.process_audio(
+            audio,
+            mode=mode,
+            prompt=""
+        )
+        text, error = result if isinstance(result, tuple) else (result, None)
+        self.keyboard_manager.type_text(text, error)
     
-    def start_translation_recording(self):
-        """开始录音（翻译模式）"""
-        self.audio_recorder.start_recording()
-    
-    def stop_translation_recording(self):
-        """停止录音并处理（翻译模式）"""
+    def _stop_recording(self):
+        """Stop recording and process audio for transcription"""
         audio = self.audio_recorder.stop_recording()
-        if audio == "TOO_SHORT":
-            logger.warning("录音时长太短，状态将重置")
-            self.keyboard_manager.reset_state()
-        elif audio:
-            result = self.audio_processor.process_audio(
-                    audio,
-                    mode="translations",
-                    prompt=""
-                )
-            text, error = result if isinstance(result, tuple) else (result, None)
-            self.keyboard_manager.type_text(text,error)
-        else:
-            logger.error("没有录音数据，状态将重置")
-            self.keyboard_manager.reset_state()
+        self._process_audio(audio, mode="transcriptions")
+    
+    def _stop_translation_recording(self):
+        """Stop recording and process audio for translation"""
+        audio = self.audio_recorder.stop_recording()
+        self._process_audio(audio, mode="translations")
 
     def reset_state(self):
-        """重置状态"""
+        """Reset assistant state"""
         self.keyboard_manager.reset_state()
     
     def run(self):
-        """运行语音助手"""
-        logger.info("=== 语音助手已启动 ===")
-        self.keyboard_manager.start_listening()
-        if self.keyboard_manager.exit_flag:
-            logger.info("=== 语音助手已关闭 ===")
-            self.reset_state()
+        """Run the voice assistant"""
+        try:
+            logger.info("=== Voice Assistant Started ===")
+            self.keyboard_manager.start_listening()
+        except Exception as e:
+            logger.error(f"Error running voice assistant: {e}", exc_info=True)
+            raise
+        finally:
+            if self.keyboard_manager.exit_flag:
+                logger.info("=== Voice Assistant Stopped ===")
+                self.reset_state()
 
 def main():
-    # 判断是 Whisper 还是 SiliconFlow
-    service_platform = os.getenv("SERVICE_PLATFORM", "siliconflow")
-    if service_platform == "groq":
-        audio_processor = WhisperProcessor()
-    elif service_platform == "siliconflow":
-        audio_processor = SenseVoiceSmallProcessor()
-    else:
-        raise ValueError(f"无效的服务平台: {service_platform}")
     try:
+        # Create audio processor using factory
+        service_platform = os.getenv("SERVICE_PLATFORM", "siliconflow")
+        audio_processor = AudioProcessorFactory.create(service_platform)
+        
+        # Initialize and run voice assistant
         assistant = VoiceAssistant(audio_processor)
         assistant.run()
+        
     except KeyboardInterrupt:
-        logger.info("程序被用户中断")
+        logger.info("Program interrupted by user")
     except Exception as e:
         error_msg = str(e)
         if "Input event monitoring will not be possible" in error_msg:
             check_accessibility_permissions()
             sys.exit(1)
-        elif "无法访问音频设备" in error_msg:
+        elif "Cannot access audio device" in error_msg:
             check_microphone_permissions()
             sys.exit(1)
         else:
-            logger.error(f"发生错误: {error_msg}", exc_info=True)
+            logger.error(f"An error occurred: {error_msg}", exc_info=True)
             sys.exit(1)
     finally:
         sys.exit(0)
