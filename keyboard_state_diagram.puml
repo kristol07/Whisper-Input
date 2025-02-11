@@ -1,0 +1,30 @@
+@startuml
+
+skinparam state {
+  BackgroundColor<<temporary>> LightGray
+  BorderColor<<temporary>> Gray
+}
+
+[*] --> IDLE
+
+IDLE --> RECORDING : Double click\ntranscription button
+IDLE --> RECORDING_TRANSLATE : Double click\ntranslation button
+
+RECORDING --> PROCESSING : Double click\ntranscription button
+RECORDING --> WARNING<<temporary>> : Recording too short
+RECORDING --> ERROR<<temporary>> : Error occurs
+
+RECORDING_TRANSLATE --> TRANSLATING : Double click\ntranslation button
+RECORDING_TRANSLATE --> WARNING<<temporary>> : Recording too short
+RECORDING_TRANSLATE --> ERROR<<temporary>> : Error occurs
+
+PROCESSING --> IDLE : Success\n(with transcribed text)
+PROCESSING --> ERROR<<temporary>> : Error occurs
+
+TRANSLATING --> IDLE : Success\n(with translated text)
+TRANSLATING --> ERROR<<temporary>> : Error occurs
+
+ERROR<<temporary>> --> IDLE : After 2 seconds
+WARNING<<temporary>> --> IDLE : After 2 seconds
+
+@enduml

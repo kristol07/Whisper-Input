@@ -75,7 +75,16 @@ class AudioPipeline:
         if mode == "translations":
             if not self.translation_processor:
                 raise ValueError("Translation processor not configured")
-            return self.translation_processor.translate(audio_data, prompt)
+            
+            # Handle direct audio translation if processor supports it
+            if isinstance(self.translation_processor, BaseAudioTranslationProcessor):
+                return self.translation_processor.translate(audio_data, prompt)
+            
+            # For text-based translation, we need transcription first
+            if not self.transcription_processor:
+                raise ValueError("Transcription processor not configured for text-based translation")
+            transcribed_text = self.transcription_processor.transcribe(audio_data, prompt)
+            return self.translation_processor.translate(transcribed_text, prompt)
         else:
             if not self.transcription_processor:
                 raise ValueError("Transcription processor not configured")

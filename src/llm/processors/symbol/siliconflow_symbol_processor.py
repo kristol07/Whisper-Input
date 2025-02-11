@@ -19,7 +19,6 @@ class SiliconFlowSymbolProcessor(BaseSymbolProcessor):
 
     def add_symbol(self, text: str) -> Union[str, Tuple[str, Exception]]:
         """Add appropriate punctuation to the input text"""
-        logger.info(f"Raw input for add_symbol: {text}")
         system_prompt = """
         Please add appropriate punctuation to the user's input and return it. Apart from this, do not add or modify anything else. Do not translate the user's input. Do not add any explanation. Do not answer the user's question and so on. Just output the user's input with punctuation!
         """
@@ -41,14 +40,12 @@ class SiliconFlowSymbolProcessor(BaseSymbolProcessor):
             logger.info("Adding punctuation marks...")
             response = requests.request("POST", self.url, headers=self.headers, json=payload)
             result = response.json().get('choices', [{}])[0].get('message', {}).get('content', '')
-            logger.info(f"Processed output from add_symbol: {result}")
             return result
         except Exception as e:
             return text, e
 
     def optimize_result(self, text):
         """Optimize recognition results"""
-        logger.info(f"Raw input for optimize_result: {text}")
         system_prompt = """
         You are a speech recognition content input optimizer.
         Please optimize the user's input based on your knowledge.
@@ -75,7 +72,6 @@ class SiliconFlowSymbolProcessor(BaseSymbolProcessor):
             logger.info("Optimizing recognition results...")
             response = requests.request("POST", self.url, headers=self.headers, json=payload)
             result = response.json().get('choices', [{}])[0].get('message', {}).get('content', '')
-            logger.info(f"Processed output from optimize_result: {result}")
             return result
         except Exception as e:
             return text, e 
